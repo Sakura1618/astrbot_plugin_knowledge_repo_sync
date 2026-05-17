@@ -1,4 +1,4 @@
-# knowledge_repo_sync
+# astrbot_plugin_knowledge_repo_sync
 
 [![AstrBot](https://img.shields.io/badge/AstrBot-Plugin-blue)](https://github.com/Soulter/AstrBot) [![Python](https://img.shields.io/badge/Python-3.10+-green)](https://www.python.org/)
 
@@ -47,13 +47,13 @@
 将插件放到：
 
 ```text
-data/plugins/knowledge_repo_sync
+data/plugins/astrbot_plugin_knowledge_repo_sync
 ```
 
 当前目录结构示例：
 
 ```text
-knowledge_repo_sync/
+astrbot_plugin_knowledge_repo_sync/
   README.md
   main.py
   metadata.yaml
