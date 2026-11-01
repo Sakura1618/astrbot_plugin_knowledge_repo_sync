@@ -10,10 +10,9 @@ from urllib.parse import urlparse
 
 from sqlmodel import delete
 
-from astrbot.api import star
+from astrbot.api import logger, star
 from astrbot.api.event import AstrMessageEvent, filter
 from astrbot.api.message_components import Plain
-from astrbot.core import logger
 from astrbot.core.knowledge_base.kb_helper import KBHelper
 from astrbot.core.knowledge_base.models import KBDocument, KBMedia, KnowledgeBase
 from astrbot.core.message.message_event_result import MessageChain
