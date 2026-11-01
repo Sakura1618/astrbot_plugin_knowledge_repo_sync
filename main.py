@@ -95,6 +95,16 @@ class Main(star.Star):
     @filter.permission_type(filter.PermissionType.ADMIN)
     @filter.command("knowledge_sync")
     async def sync_knowledge_repo(self, event: AstrMessageEvent):
+        async for result in self._run_manual_sync(event, force_full=False):
+            yield result
+
+    @filter.permission_type(filter.PermissionType.ADMIN)
+    @filter.command("knowledge_sync_full")
+    async def sync_knowledge_repo_full(self, event: AstrMessageEvent):
+        async for result in self._run_manual_sync(event, force_full=True):
+            yield result
+
+    async def _run_manual_sync(self, event: AstrMessageEvent, force_full: bool):
         if self._sync_lock.locked() or self._manual_sync_pending:
             yield event.plain_result("知识库同步任务正在进行中，请稍后再试。")
             return
@@ -109,7 +119,7 @@ class Main(star.Star):
                 yield event.plain_result("开始进行知识库同步操作，请稍候。")
 
                 try:
-                    result = await self._sync_target_kb()
+                    result = await self._sync_target_kb(force_full=force_full)
                 except Exception as exc:
                     logger.error("knowledge_repo_sync failed: %s", exc, exc_info=True)
                     yield event.plain_result(f"知识库同步失败：{exc}")
@@ -424,6 +434,7 @@ class Main(star.Star):
         self,
         args: list[str],
         workdir: str | None = None,
+        strip_output: bool = True,
     ) -> str:
         process = await asyncio.create_subprocess_exec(
             "git",
@@ -436,7 +447,8 @@ class Main(star.Star):
         if process.returncode != 0:
             stderr_text = stderr.decode("utf-8", errors="replace").strip()
             raise RuntimeError(f"git {' '.join(args)} 执行失败：{stderr_text}")
-        return stdout.decode("utf-8", errors="replace").strip()
+        decoded = stdout.decode("utf-8", errors="replace")
+        return decoded.strip() if strip_output else decoded
 
     async def _get_remote_branch(self, repo_config: RemoteRepoConfig) -> str:
         if repo_config.branch:
@@ -651,7 +663,7 @@ class Main(star.Star):
         )
         return kb_helper, True
 
-    async def _sync_target_kb(self) -> SyncRunResult:
+    async def _sync_target_kb(self, force_full: bool = False) -> SyncRunResult:
         await self._sync_branch_from_remote_url()
         repo_config = self._parse_remote_repo_config()
         kb_helper, created_new = await self._get_or_create_target_kb()
@@ -669,7 +681,8 @@ class Main(star.Star):
         last_head = await self.get_kv_data(LAST_SYNC_HEAD_KEY, None)
 
         full_sync = (
-            created_new
+            force_full
+            or created_new
             or kb_settings_changed
             or last_remote_url != repo_config.remote_url
             or last_branch != branch
@@ -846,13 +859,17 @@ class Main(star.Star):
         try:
             output = await self._run_git_command(
                 [
+                    "-c",
+                    "core.quotePath=false",
                     "diff",
                     "--name-status",
                     "--find-renames",
+                    "-z",
                     last_head,
                     remote_head,
                 ],
                 workdir=str(repo_dir),
+                strip_output=False,
             )
         except Exception as exc:
             logger.warning(
@@ -864,41 +881,58 @@ class Main(star.Star):
             return None
 
         changed_paths = set()
-        for raw_line in output.splitlines():
-            line = raw_line.strip()
-            if not line:
+        for raw_path in self._parse_name_status_z(output):
+            try:
+                normalized = self._normalize_repo_relative_path(raw_path)
+            except ValueError as exc:
+                logger.warning(
+                    "knowledge_repo_sync skipped invalid diff path %s: %s",
+                    raw_path,
+                    exc,
+                )
                 continue
 
-            parts = line.split("\t")
-            if len(parts) < 2:
+            if normalized is None:
                 continue
-
-            status = parts[0]
-            path_candidates = (
-                [parts[2]]
-                if status.startswith(("R", "C")) and len(parts) >= 3
-                else [parts[1]]
-            )
-            for raw_path in path_candidates:
-                try:
-                    normalized = self._normalize_repo_relative_path(raw_path)
-                except ValueError as exc:
-                    logger.warning(
-                        "knowledge_repo_sync skipped invalid diff path %s: %s",
-                        raw_path,
-                        exc,
-                    )
-                    continue
-
-                if normalized is None:
-                    continue
-                if normalized.suffix.lower() not in MARKDOWN_SUFFIXES:
-                    continue
-                if not self._is_included_markdown_path(normalized):
-                    continue
-                changed_paths.add(normalized.as_posix())
+            if normalized.suffix.lower() not in MARKDOWN_SUFFIXES:
+                continue
+            if not self._is_included_markdown_path(normalized):
+                continue
+            changed_paths.add(normalized.as_posix())
 
         return changed_paths
+
+    @staticmethod
+    def _parse_name_status_z(output: str) -> list[str]:
+        """Parse `git diff --name-status -z` output into affected paths.
+
+        With `-z`, paths are emitted verbatim (no quoting / octal escaping of
+        non-ASCII characters) and fields are NUL separated:
+        `<status>\0<path>\0` or, for renames/copies,
+        `<status>\0<old_path>\0<new_path>\0`.
+        """
+        fields = output.split("\0")
+        paths: list[str] = []
+        idx = 0
+        while idx < len(fields):
+            status = fields[idx].strip()
+            idx += 1
+            if not status:
+                continue
+            if status.startswith(("R", "C")):
+                if idx + 1 >= len(fields):
+                    break
+                # The old path of a rename no longer exists and will be
+                # removed via the stale-document check; only the new path
+                # needs to be (re)imported.
+                paths.append(fields[idx + 1])
+                idx += 2
+            else:
+                if idx >= len(fields):
+                    break
+                paths.append(fields[idx])
+                idx += 1
+        return paths
 
     async def _list_all_documents(self, kb_helper: KBHelper) -> list[KBDocument]:
         documents: list[KBDocument] = []
