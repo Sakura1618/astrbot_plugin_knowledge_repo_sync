@@ -154,6 +154,14 @@ astrbot_plugin_knowledge_repo_sync/
   - 新增/更新文件数量
   - 删除文件数量
 
+### 强制全量同步命令
+
+- `/knowledge_sync_full`
+
+该命令需要管理员权限。
+
+忽略上次同步记录，按远程仓库当前快照重新导入全部 Markdown 文档。适用于怀疑增量同步遗漏了变更、知识库内容与仓库不一致等情况。
+
 ### 自动同步
 
 开启 `auto_sync_enabled` 后，插件会按 `auto_sync_interval_hours` 定时检查远端仓库 HEAD 是否变化。
